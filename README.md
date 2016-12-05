@@ -1,5 +1,5 @@
 # rsc_rc
-Specific hacks for [Ressources Chrétiennes](www.ressourceschretiennes.com).
+Miscellaneous hacks, settings, Drupal mods, etc. for [Ressources Chrétiennes](www.ressourceschretiennes.com).
 
 What it does:
 - Defines the main menu block
