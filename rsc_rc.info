@@ -2,3 +2,4 @@ name = RSC Ressources Chrétiennes
 description = Miscellaneous hacks, settings, Drupal mods, etc. for Ressources Chrétiennes
 core = 7.x
 package = "RSC"
+version=7.x-1.x
