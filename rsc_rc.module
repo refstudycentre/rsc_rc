@@ -1,0 +1,203 @@
+<?php
+
+
+/**
+ * Implements hook_block_info().
+ * https://api.drupal.org/api/drupal/modules!block!block.api.php/function/hook_block_info/7
+ *
+ * Defines custom blocks
+ */
+function rsc_rc_block_info() {
+  return array(
+    'main_menu' => array(
+      'info'  => 'Conditional main menu (from rsc_rc.module)',
+      'cache' => 'DRUPAL_NO_CACHE', // This block changes per user (logged in vs. not logged in) AND per page (front vs. not-front)
+    ),
+  );
+}
+
+
+/**
+ * Implements hook_block_view($delta = '').
+ * https://api.drupal.org/api/drupal/modules!block!block.api.php/function/hook_block_view/7
+ *
+ * Serves the content for custom blocks
+ */
+function rsc_rc_block_view($delta) {
+  $block = array();
+
+  switch($delta) {
+    case 'main_menu':
+      $links = array();
+      $items = array();
+
+      $uri = request_uri();
+      if (preg_match('/^(\/pl)|(\/preacher)/',$uri)) {
+        // Preaching library menu
+
+        if (user_is_logged_in()) {
+          $links['pl'] = t('Home');
+          $links['user'] = t('My account');
+          $links['preacher/logout'] = t('Log out');
+          $links['pl/help'] = t('Help!');
+        } else {
+          $links['preacher/login'] = t('Log in');
+          $links['preacher/register'] = t('Register');
+        }
+
+      } else {
+        // Ressources Chrétiennes menus
+        if (drupal_is_front_page() || arg(0) == 'search') {
+          $links += array(
+            'nous' => 'À propos de nous',
+            'écrire' => 'Nous écrire',
+            'aider' => 'Vous pouvez nous aider',
+          );
+        } else {
+          $links[''] = t('Home');
+        }
+
+        $links['bib/parcourir'] = t('Browse');
+
+        if (user_is_logged_in()) {
+          $links['user/logout'] = t('Log out');
+        } else {
+          $links['user/login'] = t('Log in');
+        }
+
+      }
+
+      foreach($links as $path => $text) {
+        $items[] = l($text,$path);
+      }
+
+      $block['subject'] = NULL; // no title
+      $block['content'] = array(
+        '#theme'      => 'item_list',
+        '#items'      => $items,
+        '#title'      => t('Main menu'),
+        '#type'       => 'ul',
+        '#attributes' => array(
+          'class' => 'menu',
+        ),
+      );
+      break;
+  }
+
+  return $block;
+}
+
+
+/**
+ * Implements template_preprocess_block(&$variables)
+ * https://api.drupal.org/api/drupal/modules!block!block.module/function/template_preprocess_block/7
+ */
+function rsc_rc_preprocess_block(&$variables) {
+  if ($variables['block']->module == 'rsc_rc' && $variables['block']->delta == 'main_menu') {
+    $variables['classes_array'][] = 'block-menu';
+  }
+}
+
+
+/**
+ * Implements hook_menu().
+ */
+function rsc_rc_menu() {
+
+  // TODO: move this page to rsc_taxonomy or rsc_library module
+  // TODO: replace library taxonomy pages with this type of display?
+  $items['bib/parcourir'] = array(
+    'type' => MENU_NORMAL_ITEM,
+    'title' => 'Parcourir les catégories de la bibliothèque',
+    'page callback' => 'rsc_rc_browse',
+    'access callback' => 'user_access',
+    'access arguments' => array('access content'),
+  );
+
+  $items['bib'] = $items['bib/parcourir'];
+
+  return $items;
+}
+
+/**
+ * Page callback.
+ */
+function rsc_rc_browse() {
+
+  $GLOBALS['rsc_library']['lid'] = 2;
+  $content = cache_get('rsc_rc_browse');
+  if (empty($content)) { // if the data is not available from cache
+
+//     drupal_set_message("Missed browse cache. Rebuilding page.");
+
+    $content=array();
+    $vid=4; // TODO: make this a parameter
+    $terms = taxonomy_get_tree($vid); // TODO: compare performance to simple sql query (combine with query below)
+    $tree = array();
+
+    // sort the array by weight while it is still flat // TODO: compare performance to quicksort
+    function weightsort($a,$b) {
+      return ($a->weight > $b->weight);
+    }
+    usort($terms,'weightsort');
+
+    foreach($terms as &$term) {
+
+      // key all terms by tid
+      $tree[$term->tid] = &$term;
+
+      // count nodes that fall directly under each term
+      $term->nodes = db_query("SELECT count(nid) as num FROM taxonomy_index WHERE tid = :tid",array(':tid'=>$term->tid))->fetchField();
+
+      // create array to contain children of each term
+      $term->children = array();
+
+    }
+
+    // let each term be referenced by it's parent
+    foreach($tree as $tid => &$term) {
+      $parent_tid = $term->parents[0];
+      if ($parent_tid) {
+        $tree[$parent_tid]->children[$tid] = &$term;
+      }
+    }
+
+    // unset terms in top level of array that have parents
+    foreach($tree as $tid => &$term) {
+      $parent_tid = $term->parents[0];
+      if ($parent_tid) {
+        unset($tree[$tid]); // unset term in base of array
+      }
+    }
+
+    function get_items($tree) {
+      $items = array();
+      foreach($tree as $tid => &$term) {
+        $nodes = ($term->nodes) ? " ({$term->nodes})" : "" ;
+        $items[$tid] = array(
+          'data'     => l($term->name.$nodes,"taxonomy/term/{$term->tid}"),
+          'children' => get_items($term->children),
+        );
+      }
+      return $items;
+    }
+
+    $content['list'] = array(
+      '#theme'   => 'item_list',
+      '#prefix'  => '<div class="browse-taxonomy">',
+      '#suffix'  => '</div>',
+      '#items'   => get_items($tree),
+    );
+
+    // cache the browse page content (TODO: cache the rendered content?)
+    cache_set('rsc_rc_browse', $content, 'cache', REQUEST_TIME + 2*24*60*60);
+
+  } else { // data is available from cache
+    $content = $content->data;
+//     drupal_set_message("Hit browse cache :D");
+  }
+
+  return $content;
+
+}
+
